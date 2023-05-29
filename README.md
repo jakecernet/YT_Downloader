@@ -10,7 +10,7 @@ Python 3.6 or higher
 yt_dlp library (Installs automaticly when running `windows.cmd`)
 ## Usage
 - Clone the repository
-- If your're on Windows, run `windows.cmd`, else run `main.py` from command line.
+- If your're on Windows, run `main.exe`, else run `main.py` from command line.
 - Paste in the YouTube URL.
 
 The script will download the video and save it as an MP3 file.
