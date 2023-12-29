@@ -11,7 +11,7 @@ def download_video(url):
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '256',
+                'preferredquality': quality,
             }],
             'ignoreerrors': True,  # Add this option to ignore errors and continue downloading
         }
@@ -34,14 +34,28 @@ def download_video(url):
 
 
 if __name__ == "__main__":
-    print("---------------------------------")
-    print("Welcome to the YouTube Downloader!")
-    print("---------------------------------")
+    print("---------------------------------------------------------------------------------")
+    print("|                                                                               |")
+    print("|                        Welcome to the YouTube Downloader!                     |")
+    print("|                                                                               |")
+    print("---------------------------------------------------------------------------------")
     print("")
-    print("---------------------------------")
+    quality = input("Enter the bitrate of the audio you want to download (128, 192, 256, 320): ")
+    print("")
     video_url = input("Enter the YouTube video URL: ")
-    print("---------------------------------")
-    print("Downloading...")
+    print("")
+    print("---------------------------------------------------------------------------------")
+    print("|                                                                               |")
+    print("|                          Downloading your video...                            |")
+    print("|                                                                               |")
+    print("---------------------------------------------------------------------------------")
+    print("")
     download_video(video_url)
-    print("---------------------------------")
-    print("Thank you for using the YouTube Downloader!")
+    print("")
+    print("---------------------------------------------------------------------------------")
+    print("|                                                                               |")
+    print("|                       Thank you for using this program!                       |")
+    print("|                                                                               |")
+    print("---------------------------------------------------------------------------------")
+    print("")
+    input("Press enter to exit...")
