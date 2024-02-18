@@ -1,19 +1,26 @@
 # YT Downloader
-YT Downloader is a Python script that allows you to download YouTube videos and extract their audio in MP3 format. It utilizes the yt_dlp library to handle the download and audio extraction process.
+YT Downloader is a Python script that allows you to download YouTube videos and extract their audio in MP3 format. It utilizes the `yt_dlp` library to handle the download and FFmpeg to convert the downloaded video to MP3. The script is cross-platform and can be run on Windows, Linux, and macOS. It can be run from source or as an executable file.
 
 ## Features
-Download YouTube videos as MP3 files
-Extract audio from videos with preferred quality and format
-Save downloaded MP3 files in the "Downloads" folder
-## Requirements
-Python 3.6 or higher
-yt_dlp library (Installs automaticly when running `windows.cmd`)
-## Usage
-- Clone the repository
-- If your're on Windows, run `main.exe`, else run `main.py` from command line.
-- Paste in the YouTube URL.
+ - Download YouTube videos and playlists as MP3 files
+ - Download YouTube Music playlists as MP3 files
 
-The script will download the video and save it as an MP3 file.
+## Requirements
+- Python 3.6 or higher if you're running the script from source
+- Windows 7 or higher if you're running the executable
+- FFmpeg must be installed and added to PATH (for converting videos to MP3, otherwise the script will download the video in WEBM format)
+
+# Usage
+### Windows:
+ - Run the executable file
+ - Select the preferred audio quality and format
+ - Enter the URL of the YouTube video you want to download
+ - The script will download the video and save it as an MP3 file in the folder where the executable is located
+
+### Linux/macOS:
+- Run the command: `pip install -r requirements.txt` to install the libraries
+- Run the command: `python main.py`
+- Do the same steps as in the Windows version
 
 ## Disclaimer
 Please note that downloading YouTube videos may infringe on the platform's terms of service and may be subject to legal restrictions. Ensure that you have the necessary rights or permissions to download and use the content before proceeding. The script is provided for educational purposes only, and the responsibility for its usage lies with the user.
