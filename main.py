@@ -3,59 +3,63 @@ from turtle import title
 from yt_dlp import YoutubeDL
 title = "YouTube Downloader"
 
-def download_video(url):
-    try:
-        # Set options for yt_dlp
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
+def download(url):
+    format = input("Do you want to download audio or video? (Audio - 1, Video - 2) ")
+    
+    if format == "1":
+        convert = input("Do you want to convert the audio MP3? (Y, N) ")
+        quality = input("What quality do you want to convert the audio to? (128, 192, 256, 320) ")
+
+        if convert == "Y":
+            keep = input("Do you want to keep the original audio file? (Y, N) ")
+            if keep == "Y":
+                ydl_opts = {
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': quality,
+                    }],
+                    'keepvideo': True,
+                }
+            else:
+                ydl_opts = {
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': quality,
+                    }],
+                    'keepvideo': False,
+                }
+        else:
+            ydl_opts = {
+                'format': 'bestaudio/best',
                 'preferredquality': quality,
-            }],
-            'ignoreerrors': True,  # Add this option to ignore errors and continue downloading
-        }
+            }
 
-        # Create a YoutubeDL object
-        ydl = YoutubeDL(ydl_opts)
+    elif format == "2":
+        convert = input("Do you want to convert the video to MP4? (Y, N) ")
+        quality = input("What quality do you want to convert the video to? (144, 240, 360, 480, 720, 1080, 1440, 2160) ")
 
-        # Download the video and extract audio as MP3
-        info_dict = ydl.extract_info(url, download=True)
-        video_title = info_dict.get('title', None)
+        if convert == "Y":
+            ydl_opts = {
+                'format': 'bestvideo[height<={}]'.format(quality) + '+bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
+            }
+        else:
+            ydl_opts = {
+                'format': 'bestvideo[height<={}]'.format(quality) + '+bestaudio/best',
+            }
+        
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    
+def main():
+    url = input("Enter the URL of the video you want to download: ")
+    download(url)
 
-        # Move the downloaded MP3 file to the "Downloads" folder
-        output_folder = os.path.expanduser("~")
-        output_path = os.path.join(output_folder, video_title + ".mp3")
-
-        print("Video downloaded as MP3 successfully!")
-
-    except Exception as e:
-        print("An error occurred:", str(e))
-
-
-if __name__ == "__main__":
-    print("---------------------------------------------------------------------------------")
-    print("|                                                                               |")
-    print("|                        Welcome to the YouTube Downloader!                     |")
-    print("|                                                                               |")
-    print("---------------------------------------------------------------------------------")
-    print("")
-    quality = input("Enter the bitrate of the audio you want to download (128, 192, 256, 320): ")
-    print("")
-    video_url = input("Enter the YouTube video URL: ")
-    print("")
-    print("---------------------------------------------------------------------------------")
-    print("|                                                                               |")
-    print("|                          Downloading your video...                            |")
-    print("|                                                                               |")
-    print("---------------------------------------------------------------------------------")
-    print("")
-    download_video(video_url)
-    print("")
-    print("---------------------------------------------------------------------------------")
-    print("|                                                                               |")
-    print("|                       Thank you for using this program!                       |")
-    print("|                                                                               |")
-    print("---------------------------------------------------------------------------------")
-    print("")
-    input("Press enter to exit...")
+main()
