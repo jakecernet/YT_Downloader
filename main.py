@@ -14,46 +14,57 @@ def audio_download():
     quality = customtkinter.CTkLabel(app, text="What quality do you want to convert the audio to?")
     quality.place(relx=0.5, rely=0.6, anchor=customtkinter.CENTER)
 
-    btn_128 = customtkinter.CTkButton(master=app, text="128 kbps", command=audioDownloader(128))
+    btn_128 = customtkinter.CTkButton(master=app, text="128 kbps", command=audio128)
     btn_128.place(relx=0.2, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_192 = customtkinter.CTkButton(master=app, text="192 kbps", command=audioDownloader(192))
+    btn_192 = customtkinter.CTkButton(master=app, text="192 kbps", command=audio192)
     btn_192.place(relx=0.4, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_256 = customtkinter.CTkButton(master=app, text="256 kbps", command=audioDownloader(256))
+    btn_256 = customtkinter.CTkButton(master=app, text="256 kbps", command=audio256)
     btn_256.place(relx=0.6, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_320 = customtkinter.CTkButton(master=app, text="320 kbps", command=audioDownloader(320))
+    btn_320 = customtkinter.CTkButton(master=app, text="320 kbps", command=audio320)
     btn_320.place(relx=0.8, rely=0.7, anchor=customtkinter.CENTER)
-
 
 def video_download():
     quality = customtkinter.CTkLabel(app, text="What quality do you want to convert the video to? (144, 240, 360, 480, 720, 1080, 1440, 2160)")
     quality.place(relx=0.5, rely=0.6, anchor=customtkinter.CENTER)
 
-    btn_144 = customtkinter.CTkButton(master=app, text="144", command=videoDownloader(144))
+    btn_144 = customtkinter.CTkButton(master=app, text="144", command=video144)
     btn_144.place(relx=0.2, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_240 = customtkinter.CTkButton(master=app, text="240", command=videoDownloader(240))
+    btn_240 = customtkinter.CTkButton(master=app, text="240", command=video240)
     btn_240.place(relx=0.3, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_360 = customtkinter.CTkButton(master=app, text="360", command=videoDownloader(360))
+    btn_360 = customtkinter.CTkButton(master=app, text="360", command=video360)
     btn_360.place(relx=0.4, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_480 = customtkinter.CTkButton(master=app, text="480", command=videoDownloader(480))
+    btn_480 = customtkinter.CTkButton(master=app, text="480", command=video480)
     btn_480.place(relx=0.5, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_720 = customtkinter.CTkButton(master=app, text="720", command=videoDownloader(720))
+    btn_720 = customtkinter.CTkButton(master=app, text="720", command=video720)
     btn_720.place(relx=0.6, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_1080 = customtkinter.CTkButton(master=app, text="1080", command=videoDownloader(1080))  
+    btn_1080 = customtkinter.CTkButton(master=app, text="1080", command=video1080)  
     btn_1080.place(relx=0.7, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_1440 = customtkinter.CTkButton(master=app, text="1440", command=videoDownloader(1440))
+    btn_1440 = customtkinter.CTkButton(master=app, text="1440", command=video1440)
     btn_1440.place(relx=0.8, rely=0.7, anchor=customtkinter.CENTER)
 
-    btn_2160 = customtkinter.CTkButton(master=app, text="2160", command=videoDownloader(2160))
+    btn_2160 = customtkinter.CTkButton(master=app, text="2160", command=video2160)
     btn_2160.place(relx=0.9, rely=0.7, anchor=customtkinter.CENTER)
+
+def audio128():
+    audioDownloader(128)
+
+def audio192():
+    audioDownloader(192)
+
+def audio256():
+    audioDownloader(256)
+
+def audio320():
+    audioDownloader(320)
 
 def audioDownloader(quality):
     ydl_opts = {
@@ -70,7 +81,31 @@ def audioDownloader(quality):
    
     done = customtkinter.CTkLabel(app, text="Audio downloaded successfully")
     done.place(relx=0.5, rely=0.9, anchor=customtkinter.CENTER)
-    
+
+def video144():
+    videoDownloader(144)
+
+def video240():
+    videoDownloader(240)
+
+def video360():
+    videoDownloader(360)
+
+def video480():
+    videoDownloader(480)
+
+def video720():
+    videoDownloader(720)
+
+def video1080():
+    videoDownloader(1080)
+
+def video1440():
+    videoDownloader(1440)
+
+def video2160():
+    videoDownloader(2160)
+
 def videoDownloader(videoQuality):
     ydl_opts = {
         'format': 'bestvideo[height<={}]'.format(videoQuality) + '+bestaudio/best',
