@@ -5,7 +5,6 @@ title = "YouTube Downloader"
 
 def download_video(url):
     try:
-        # Set options for yt_dlp
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -14,12 +13,14 @@ def download_video(url):
                 'preferredquality': '192',
             }],
             'ignoreerrors': True,
+            'outtmpl': '%(title)s.%(ext)s',
+            'restrictfilenames': True,
+            'quiet': True,
+            'ignoreerrors': True,
         }
 
-        # Create a YoutubeDL object
         ydl = YoutubeDL(ydl_opts)
 
-        # Download the video and extract audio as MP3
         info_dict = ydl.extract_info(url, download=True)
         video_title = info_dict.get('title', None)
 
@@ -30,14 +31,8 @@ def download_video(url):
 
 
 if __name__ == "__main__":
-    print("--------------------------------------")
-    print("  Welcome to the YouTube Downloader!")
-    print("--------------------------------------")
-    print("")
-    print("---------------------------------")
-    video_url = input("  Enter the YouTube video URL: ")
-    print("---------------------------------")
-    print("Downloading...")
+    video_url = input("\nEnter the YouTube video URL: ")
+    print("\nDownloading...\n")
     download_video(video_url)
     print("---------------------------------")
-    print("Thank you for using the YouTube Downloader!")
+    print("Thank you for using the YouTube Downloader!") 
