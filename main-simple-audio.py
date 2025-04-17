@@ -1,5 +1,3 @@
-import os
-from turtle import title
 from yt_dlp import YoutubeDL
 title = "YouTube Downloader"
 
