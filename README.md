@@ -50,3 +50,11 @@ The script is cross-platform and can be run on Windows, Linux, and macOS. If you
 -   Run the command: `pip install -r requirements.txt` to install the libraries
 -   Run the command: `python main-simple.py`
 -   Do the same steps as in the Windows version
+
+# Building your own executable
+
+If you want to build your own executable, you can use PyInstaller. To do this, follow these steps:
+
+1. Install PyInstaller: `pip install pyinstaller`
+2. Run the command: `pyinstaller --onefile main.py` or `pyinstaller --onefile main-simple-audio.py` or `pyinstaller --onefile main-simple-video.py` to build the executable file. The executable file will be created in the `dist` folder.
+3. You can now run the executable file without needing to install Python or any libraries (although FFmpeg must be installed and added to PATH).
