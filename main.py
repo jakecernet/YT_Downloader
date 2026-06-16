@@ -6,511 +6,573 @@ from PIL import Image
 import requests
 from io import BytesIO
 import os
-import tempfile
 import sys
+import tempfile
+import subprocess
+from tkinter import filedialog
 
-# Hide console window when running as executable on Windows
-if sys.platform == 'win32':
+# ── Suppress console on frozen Windows builds ─────────────────────────────────
+if sys.platform == 'win32' and getattr(sys, 'frozen', False):
     import ctypes
-    import platform
-
-    # Only hide console if running as compiled executable (not in development)
-    if getattr(sys, 'frozen', False):
-        # Get the console window handle
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        user32 = ctypes.WinDLL('user32', use_last_error=True)
-
-        hWnd = kernel32.GetConsoleWindow()
-        if hWnd:
-            user32.ShowWindow(hWnd, 0)  # 0 = SW_HIDE
+    hWnd = ctypes.WinDLL('kernel32', use_last_error=True).GetConsoleWindow()
+    if hWnd:
+        ctypes.WinDLL('user32', use_last_error=True).ShowWindow(hWnd, 0)
 
 customtkinter.set_appearance_mode("dark")
 customtkinter.set_default_color_theme("dark-blue")
 
 
 class YouTubeDownloader:
+    # ── Colour palette ────────────────────────────────────────────────────────
+    C_GREEN   = "#1DB954";  C_GREEN_H  = "#17a049"
+    C_RED     = "#E53935";  C_RED_H    = "#c62828"
+    C_MUTED   = "#888888"
+    C_SUCCESS = "#50C878"
+    C_ERROR   = "#FF5555"
+    C_LINK    = "#6BA3D6"
+
     def __init__(self):
         self.app = customtkinter.CTk()
         self.app.title("YouTube Downloader")
-        self.app.geometry("950x700")
+        self.app.geometry("960x760")
         self.app.resizable(False, False)
 
-        # Store widgets for cleanup
-        self.dynamic_widgets = []
-        self.video_info = None
-        self.thumbnail_path = None
+        self.video_info      = None
+        self.thumbnail_path  = None
+        self.dynamic_widgets = []   # widgets owned by the current option strip
+        self.progress_bar    = None
+        self.progress_label  = None
+        self.download_dir    = os.path.join(os.path.expanduser("~"), "Downloads")
 
-        self.setup_ui()
+        self._build_ui()
 
-    def setup_ui(self):
-        """Initialize the main UI components."""
-        # Title
-        self.title_label = customtkinter.CTkLabel(
-            self.app,
-            text="YouTube Downloader",
-            font=customtkinter.CTkFont(size=24, weight="bold")
-        )
-        self.title_label.pack(pady=15)
+    # ═══════════════════════════════════════════════════════ UI CONSTRUCTION ══
 
-        # URL Entry Frame
-        url_frame = customtkinter.CTkFrame(self.app, fg_color="transparent")
-        url_frame.pack(pady=5)
+    def _build_ui(self):
+        self.app.columnconfigure(0, weight=1)
+
+        # ── Row 0: Header ─────────────────────────────────────────────────────
+        hdr = customtkinter.CTkFrame(self.app, fg_color="transparent")
+        hdr.grid(row=0, column=0, pady=(18, 4))
+        customtkinter.CTkLabel(
+            hdr, text="YouTube Downloader",
+            font=customtkinter.CTkFont(size=26, weight="bold")
+        ).pack()
+        customtkinter.CTkLabel(
+            hdr, text="powered by yt-dlp",
+            font=customtkinter.CTkFont(size=11), text_color=self.C_MUTED
+        ).pack()
+
+        # ── Row 1: URL bar ────────────────────────────────────────────────────
+        url_row = customtkinter.CTkFrame(self.app, fg_color="transparent")
+        url_row.grid(row=1, column=0, pady=10)
 
         self.url_entry = customtkinter.CTkEntry(
-            url_frame,
-            placeholder_text="Enter the YouTube video URL here...",
-            width=650,
-            height=40,
-            font=customtkinter.CTkFont(size=14)
+            url_row, placeholder_text="Paste a YouTube URL here…",
+            width=680, height=42, font=customtkinter.CTkFont(size=14), corner_radius=8
         )
-        self.url_entry.pack(side="left", padx=5)
+        self.url_entry.pack(side="left", padx=(0, 8))
+        self.url_entry.bind("<Return>", lambda _: self.fetch_video_info())
 
         self.info_btn = customtkinter.CTkButton(
-            url_frame,
-            text="Get Info",
-            command=self.fetch_video_info,
-            width=120,
-            height=40,
-            font=customtkinter.CTkFont(size=14)
+            url_row, text="Get Info", command=self.fetch_video_info,
+            width=120, height=42,
+            font=customtkinter.CTkFont(size=14, weight="bold"), corner_radius=8
         )
-        self.info_btn.pack(side="left", padx=5)
+        self.info_btn.pack(side="left")
 
-        # Video info frame (for thumbnail and details)
-        self.info_display_frame = customtkinter.CTkFrame(self.app, width=880, height=200)
-        self.info_display_frame.pack(pady=10)
-        self.info_display_frame.pack_propagate(False)
+        # ── Row 2: Save-to row ────────────────────────────────────────────────
+        dir_row = customtkinter.CTkFrame(self.app, fg_color="transparent")
+        dir_row.grid(row=2, column=0, pady=(0, 6))
 
-        # Format selection frame (initially hidden)
-        self.format_frame = customtkinter.CTkFrame(self.app, fg_color="transparent")
+        customtkinter.CTkLabel(
+            dir_row, text="Save to:",
+            font=customtkinter.CTkFont(size=12), text_color=self.C_MUTED
+        ).pack(side="left", padx=(0, 4))
 
-        self.format_label = customtkinter.CTkLabel(
-            self.format_frame,
-            text="Choose download format:",
-            font=customtkinter.CTkFont(size=16)
+        self.dir_lbl = customtkinter.CTkLabel(
+            dir_row, text=self._fmt_path(self.download_dir),
+            font=customtkinter.CTkFont(size=12),
+            text_color=self.C_LINK, cursor="hand2"
         )
-        self.format_label.grid(row=0, column=0, padx=20)
+        self.dir_lbl.pack(side="left")
+        self.dir_lbl.bind("<Button-1>", lambda _: self._browse())
+
+        customtkinter.CTkButton(
+            dir_row, text="Browse…", command=self._browse,
+            width=74, height=26,
+            font=customtkinter.CTkFont(size=12), corner_radius=6
+        ).pack(side="left", padx=8)
+
+        # ── Row 3: Video info panel ───────────────────────────────────────────
+        self.info_panel = customtkinter.CTkFrame(
+            self.app, width=900, height=220, corner_radius=12
+        )
+        self.info_panel.grid(row=3, column=0, padx=30, pady=8)
+        self.info_panel.pack_propagate(False)
+
+        customtkinter.CTkLabel(
+            self.info_panel,
+            text="Enter a YouTube URL and press  Get Info  to start",
+            font=customtkinter.CTkFont(size=13), text_color=self.C_MUTED
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        # ── Row 4: Format chooser (hidden until video is loaded) ──────────────
+        self.fmt_frame = customtkinter.CTkFrame(self.app, fg_color="transparent")
+        self.fmt_frame.grid(row=4, column=0, pady=10)
+        self.fmt_frame.grid_remove()
+
+        customtkinter.CTkLabel(
+            self.fmt_frame, text="Download as:",
+            font=customtkinter.CTkFont(size=14, weight="bold")
+        ).grid(row=0, column=0, padx=16)
 
         self.audio_btn = customtkinter.CTkButton(
-            self.format_frame,
-            text="Audio (MP3)",
-            command=self.show_audio_options,
-            width=150,
-            height=40,
-            font=customtkinter.CTkFont(size=14)
+            self.fmt_frame, text="🎵  Audio (MP3)",
+            command=self._show_audio_opts,
+            width=155, height=42,
+            font=customtkinter.CTkFont(size=13, weight="bold"), corner_radius=8,
+            fg_color=self.C_GREEN, hover_color=self.C_GREEN_H
         )
-        self.audio_btn.grid(row=0, column=1, padx=10)
+        self.audio_btn.grid(row=0, column=1, padx=8)
 
         self.video_btn = customtkinter.CTkButton(
-            self.format_frame,
-            text="Video (MP4)",
-            command=self.show_video_options,
-            width=150,
-            height=40,
-            font=customtkinter.CTkFont(size=14)
+            self.fmt_frame, text="🎬  Video (MP4)",
+            command=self._show_video_opts,
+            width=155, height=42,
+            font=customtkinter.CTkFont(size=13, weight="bold"), corner_radius=8,
+            fg_color=self.C_RED, hover_color=self.C_RED_H
         )
-        self.video_btn.grid(row=0, column=2, padx=10)
+        self.video_btn.grid(row=0, column=2, padx=8)
 
-        # Options frame (for quality selection)
-        self.options_frame = customtkinter.CTkFrame(self.app, width=880, height=80)
-        self.options_frame.pack_propagate(False)
+        # ── Row 5: Quality / options strip (hidden until format chosen) ────────
+        self.opts_frame = customtkinter.CTkFrame(
+            self.app, width=900, height=78, corner_radius=12
+        )
+        self.opts_frame.grid(row=5, column=0, padx=30, pady=4)
+        self.opts_frame.pack_propagate(False)
+        self.opts_frame.grid_remove()
 
-        # Status frame
-        self.status_frame = customtkinter.CTkFrame(self.app, width=880, height=100)
-        self.status_frame.pack(pady=10)
-        self.status_frame.pack_propagate(False)
+        # ── Row 6: Progress strip (hidden until download starts) ──────────────
+        self.prog_frame = customtkinter.CTkFrame(
+            self.app, width=900, height=90, corner_radius=12
+        )
+        self.prog_frame.grid(row=6, column=0, padx=30, pady=4)
+        self.prog_frame.pack_propagate(False)
+        self.prog_frame.grid_remove()
 
+        # ── Row 7: Status bar (always visible) ────────────────────────────────
+        self.status_bar = customtkinter.CTkFrame(
+            self.app, fg_color="transparent", height=60
+        )
+        self.status_bar.grid(row=7, column=0, padx=30, pady=(4, 14))
+        self.status_bar.pack_propagate(False)
 
-    def clear_dynamic_widgets(self):
-        """Remove all dynamically created widgets."""
-        for widget in self.dynamic_widgets:
-            widget.destroy()
+    # ═══════════════════════════════════════════════════════ HELPERS ══════════
+
+    @staticmethod
+    def _fmt_path(p, n=65):
+        return p if len(p) <= n else "…" + p[-(n - 1):]
+
+    def _browse(self):
+        d = filedialog.askdirectory(initialdir=self.download_dir)
+        if d:
+            self.download_dir = d
+            self.dir_lbl.configure(text=self._fmt_path(d))
+
+    def _open_dir(self):
+        if sys.platform == 'win32':
+            os.startfile(self.download_dir)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', self.download_dir])
+        else:
+            subprocess.run(['xdg-open', self.download_dir])
+
+    def _clear_opts(self):
+        """Destroy widgets owned by the current option strip."""
+        for w in self.dynamic_widgets:
+            w.destroy()
         self.dynamic_widgets.clear()
 
-    def fetch_video_info(self):
-        """Fetch video information and thumbnail in a separate thread."""
-        # Validate URL
-        is_valid, error_msg = self.validate_url(self.url_entry.get())
-        if not is_valid:
-            self.show_error(error_msg)
-            return
-
+    def _lock(self):
+        self.audio_btn.configure(state="disabled")
+        self.video_btn.configure(state="disabled")
         self.info_btn.configure(state="disabled")
-        self.show_status("Fetching video information...")
 
-        thread = threading.Thread(target=self._fetch_video_info_thread)
-        thread.daemon = True
-        thread.start()
+    def _unlock(self):
+        self.audio_btn.configure(state="normal")
+        self.video_btn.configure(state="normal")
+        self.info_btn.configure(state="normal")
 
-    def _fetch_video_info_thread(self):
-        """Thread function for fetching video info."""
+    def _validate_url(self, url):
+        if not url or not url.strip():
+            return False, "Please enter a URL."
+        if not re.match(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/', url):
+            return False, "Please enter a valid YouTube URL."
+        return True, ""
+
+    # ═══════════════════════════════════════════════════════ STATUS ═══════════
+
+    def _status(self, msg, color=None):
+        for w in self.status_bar.winfo_children():
+            w.destroy()
+        if msg:
+            customtkinter.CTkLabel(
+                self.status_bar, text=msg,
+                font=customtkinter.CTkFont(size=13),
+                text_color=color or "#CCCCCC",
+                wraplength=860
+            ).pack(expand=True)
+
+    def _status_success(self, title, height=None):
+        """Status row with success message + optional resolution + Open Folder button."""
+        for w in self.status_bar.winfo_children():
+            w.destroy()
+        row = customtkinter.CTkFrame(self.status_bar, fg_color="transparent")
+        row.pack(expand=True, fill="both")
+        short  = (title[:48] + "…") if len(title) > 48 else title
+        badge  = f"  [{height}p]" if height else ""
+        customtkinter.CTkLabel(
+            row, text=f"✓  {short}{badge}",
+            font=customtkinter.CTkFont(size=13), text_color=self.C_SUCCESS
+        ).pack(side="left", pady=10)
+        customtkinter.CTkButton(
+            row, text="Open Folder", command=self._open_dir,
+            width=110, height=28,
+            font=customtkinter.CTkFont(size=12), corner_radius=6
+        ).pack(side="right", padx=(8, 0), pady=10)
+
+    # ═══════════════════════════════════════════════════════ PROGRESS ═════════
+
+    def _init_progress(self):
+        for w in self.prog_frame.winfo_children():
+            w.destroy()
+        self.prog_frame.grid()
+
+        self.progress_bar = customtkinter.CTkProgressBar(
+            self.prog_frame, width=840, height=14,
+            corner_radius=7, mode="determinate"
+        )
+        self.progress_bar.set(0)
+        self.progress_bar.pack(pady=(18, 5), padx=30)
+
+        self.progress_label = customtkinter.CTkLabel(
+            self.prog_frame, text="Preparing…",
+            font=customtkinter.CTkFont(size=12), text_color=self.C_MUTED
+        )
+        self.progress_label.pack()
+
+    def _on_progress(self, d):
+        """yt-dlp progress hook — called from the download thread."""
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+            done  = d.get('downloaded_bytes', 0)
+            speed = d.get('speed') or 0
+            eta   = d.get('eta') or 0
+
+            frac = min(done / total, 1.0) if total else 0
+
+            spd = (f"{speed / 1_048_576:.1f} MB/s" if speed >= 1_048_576
+                   else f"{speed / 1024:.0f} KB/s"   if speed >= 1024
+                   else f"{speed:.0f} B/s"            if speed else "—")
+
+            eta_s = (f"{eta // 60}m {eta % 60:02d}s" if eta >= 60
+                     else f"{eta}s"                   if eta else "—")
+
+            pct  = d.get('_percent_str', '').strip()
+            text = f"{pct}  ·  {spd}  ·  ETA {eta_s}"
+
+            self.app.after(0, self.progress_bar.set, frac)
+            self.app.after(0, lambda t=text: self.progress_label.configure(text=t))
+
+        elif d['status'] == 'finished':
+            self.app.after(0, self.progress_bar.set, 1.0)
+            self.app.after(0, lambda: self.progress_label.configure(text="Post-processing…"))
+
+    # ═══════════════════════════════════════════════════════ FETCH INFO ════════
+
+    def fetch_video_info(self):
+        ok, msg = self._validate_url(self.url_entry.get())
+        if not ok:
+            self._status(msg, self.C_ERROR)
+            return
+        self.info_btn.configure(state="disabled", text="Loading…")
+        self._status("Fetching video information…", self.C_MUTED)
+        threading.Thread(target=self._fetch_thread, daemon=True).start()
+
+    def _fetch_thread(self):
         try:
             url = self.url_entry.get().strip()
+            with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+            self.video_info = info
 
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-            }
+            thumb = info.get('thumbnail')
+            if thumb:
+                r = requests.get(thumb, timeout=10)
+                img = Image.open(BytesIO(r.content))
+                img.thumbnail((298, 188), Image.Resampling.LANCZOS)
+                self.thumbnail_path = os.path.join(tempfile.gettempdir(), 'yt_thumb.jpg')
+                img.save(self.thumbnail_path)
 
-            with YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=False)
-                self.video_info = info_dict
+            self.app.after(0, self._render_info)
+        except Exception as exc:
+            self.app.after(0, self._status, f"Could not fetch info: {exc}", self.C_ERROR)
+            self.app.after(0, lambda: self.info_btn.configure(state="normal", text="Get Info"))
 
-                # Download thumbnail
-                thumbnail_url = info_dict.get('thumbnail')
-                if thumbnail_url:
-                    response = requests.get(thumbnail_url, timeout=10)
-                    img = Image.open(BytesIO(response.content))
-
-                    # Resize thumbnail to fit display
-                    img.thumbnail((300, 200), Image.Resampling.LANCZOS)
-
-                    # Save thumbnail temporarily
-                    self.thumbnail_path = os.path.join(tempfile.gettempdir(), 'yt_thumb.jpg')
-                    img.save(self.thumbnail_path)
-
-                self.app.after(0, self.display_video_info)
-
-        except Exception as e:
-            error_msg = f"Failed to fetch video info: {str(e)}"
-            self.app.after(0, self.show_error, error_msg)
-            self.app.after(0, lambda: self.info_btn.configure(state="normal"))
-
-    def display_video_info(self):
-        """Display video information and thumbnail."""
-        # Clear info frame
-        for widget in self.info_display_frame.winfo_children():
-            widget.destroy()
-
-        # Clear status
-        for widget in self.status_frame.winfo_children():
-            widget.destroy()
+    def _render_info(self):
+        for w in self.info_panel.winfo_children():
+            w.destroy()
+        self._status("")
 
         if not self.video_info:
             return
+        info = self.video_info
 
-        # Create left frame for thumbnail
-        left_frame = customtkinter.CTkFrame(self.info_display_frame, fg_color="transparent")
-        left_frame.pack(side="left", padx=20, pady=10)
+        # Left: thumbnail ──────────────────────────────────────────────────────
+        left = customtkinter.CTkFrame(self.info_panel, fg_color="transparent")
+        left.pack(side="left", padx=(14, 8), pady=14)
 
-        # Display thumbnail
         if self.thumbnail_path and os.path.exists(self.thumbnail_path):
-            thumbnail_img = customtkinter.CTkImage(
-                light_image=Image.open(self.thumbnail_path),
-                dark_image=Image.open(self.thumbnail_path),
-                size=(300, 200)
+            img = customtkinter.CTkImage(
+                Image.open(self.thumbnail_path),
+                Image.open(self.thumbnail_path),
+                size=(298, 188)
             )
-            thumbnail_label = customtkinter.CTkLabel(left_frame, image=thumbnail_img, text="")
-            thumbnail_label.image = thumbnail_img  # Keep reference
-            thumbnail_label.pack()
+            thumb_lbl = customtkinter.CTkLabel(left, image=img, text="", corner_radius=6)
+            thumb_lbl.image = img   # keep reference
+            thumb_lbl.pack()
 
-        # Create right frame for info
-        right_frame = customtkinter.CTkFrame(self.info_display_frame, fg_color="transparent")
-        right_frame.pack(side="left", padx=20, pady=10, fill="both", expand=True)
+        # Right: metadata ──────────────────────────────────────────────────────
+        right = customtkinter.CTkFrame(self.info_panel, fg_color="transparent")
+        right.pack(side="left", padx=(6, 14), pady=14, fill="both", expand=True)
 
-        # Video details
-        title = self.video_info.get('title', 'Unknown')
-        uploader = self.video_info.get('uploader', 'Unknown')
-        duration = self.video_info.get('duration', 0)
-        view_count = self.video_info.get('view_count', 0)
+        title = info.get('title', 'Unknown')
+        customtkinter.CTkLabel(
+            right,
+            text=(title[:68] + "…") if len(title) > 68 else title,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            anchor="w", wraplength=510
+        ).pack(anchor="w", pady=(4, 10))
 
-        # Format duration
-        minutes = duration // 60
-        seconds = duration % 60
-        duration_str = f"{minutes}:{seconds:02d}"
+        dur = info.get('duration') or 0
+        h, m, s = dur // 3600, (dur % 3600) // 60, dur % 60
+        dur_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
-        # Format view count
-        if view_count >= 1000000:
-            views_str = f"{view_count / 1000000:.1f}M"
-        elif view_count >= 1000:
-            views_str = f"{view_count / 1000:.1f}K"
-        else:
-            views_str = str(view_count)
+        vc = info.get('view_count') or 0
+        views = (f"{vc / 1_000_000:.1f}M" if vc >= 1_000_000
+                 else f"{vc / 1000:.1f}K"  if vc >= 1000
+                 else str(vc))
 
-        info_texts = [
-            ("Title:", title[:60] + "..." if len(title) > 60 else title),
-            ("Channel:", uploader),
-            ("Duration:", duration_str),
-            ("Views:", views_str),
-        ]
+        # `get('upload_date', '')` returns None when the key exists but is None,
+        # so we use `or ''` to safely coerce None → empty string.
+        # Fall back to release_date if upload_date is absent.
+        ud = info.get('upload_date') or info.get('release_date') or ''
+        date_str = f"{ud[:4]}-{ud[4:6]}-{ud[6:]}" if len(ud) == 8 else "—"
 
-        for label_text, value_text in info_texts:
-            row_frame = customtkinter.CTkFrame(right_frame, fg_color="transparent")
-            row_frame.pack(anchor="w", pady=3)
+        for label, value in [
+            ("📺  Channel",  info.get('uploader', '—')),
+            ("⏱  Duration", dur_str),
+            ("👁  Views",    f"{views} views"),
+            ("📅  Uploaded", date_str),
+        ]:
+            r = customtkinter.CTkFrame(right, fg_color="transparent")
+            r.pack(anchor="w", pady=3)
+            customtkinter.CTkLabel(
+                r, text=label + ":",
+                font=customtkinter.CTkFont(size=12, weight="bold"),
+                text_color=self.C_MUTED, width=100, anchor="w"
+            ).pack(side="left")
+            customtkinter.CTkLabel(
+                r, text=value,
+                font=customtkinter.CTkFont(size=12), anchor="w"
+            ).pack(side="left", padx=4)
 
-            label = customtkinter.CTkLabel(
-                row_frame,
-                text=label_text,
-                font=customtkinter.CTkFont(size=13, weight="bold"),
-                width=80,
-                anchor="w"
+        self.fmt_frame.grid()
+        self.info_btn.configure(state="normal", text="Get Info")
+
+    # ═══════════════════════════════════════════════════════ FORMAT OPTIONS ════
+
+    def _show_audio_opts(self):
+        self._clear_opts()
+        self.prog_frame.grid_remove()
+        self.opts_frame.grid()
+
+        # Centre the controls inside the strip
+        inner = customtkinter.CTkFrame(self.opts_frame, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        self.dynamic_widgets.append(inner)   # destroying inner destroys children too
+
+        customtkinter.CTkLabel(
+            inner, text="Quality:",
+            font=customtkinter.CTkFont(size=13, weight="bold")
+        ).pack(side="left", padx=(0, 8))
+
+        self.audio_combo = customtkinter.CTkComboBox(
+            inner, values=["128 kbps", "192 kbps", "256 kbps", "320 kbps"],
+            width=152, height=36, font=customtkinter.CTkFont(size=13), state="readonly"
+        )
+        self.audio_combo.set("192 kbps")
+        self.audio_combo.pack(side="left", padx=8)
+
+        customtkinter.CTkButton(
+            inner, text="⬇  Download", command=self._start_audio,
+            width=140, height=36,
+            font=customtkinter.CTkFont(size=13, weight="bold"), corner_radius=8,
+            fg_color=self.C_GREEN, hover_color=self.C_GREEN_H
+        ).pack(side="left", padx=8)
+
+    def _show_video_opts(self):
+        self._clear_opts()
+        self.prog_frame.grid_remove()
+        self.opts_frame.grid()
+
+        inner = customtkinter.CTkFrame(self.opts_frame, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        self.dynamic_widgets.append(inner)
+
+        customtkinter.CTkLabel(
+            inner, text="Resolution:",
+            font=customtkinter.CTkFont(size=13, weight="bold")
+        ).pack(side="left", padx=(0, 8))
+
+        self.video_combo = customtkinter.CTkComboBox(
+            inner, values=["360p", "480p", "720p", "1080p", "1440p", "2160p (4K)"],
+            width=152, height=36, font=customtkinter.CTkFont(size=13), state="readonly"
+        )
+        self.video_combo.set("1080p")
+        self.video_combo.pack(side="left", padx=8)
+
+        customtkinter.CTkButton(
+            inner, text="⬇  Download", command=self._start_video,
+            width=140, height=36,
+            font=customtkinter.CTkFont(size=13, weight="bold"), corner_radius=8,
+            fg_color=self.C_RED, hover_color=self.C_RED_H
+        ).pack(side="left", padx=8)
+
+    # ═══════════════════════════════════════════════════════ DOWNLOAD ═════════
+
+    def _start_audio(self):
+        quality = self.audio_combo.get().split()[0]   # "192 kbps" → "192"
+        self._lock()
+        self.opts_frame.grid_remove()
+        self._clear_opts()
+        self._init_progress()
+        self._status(f"Downloading MP3 at {quality} kbps…", self.C_MUTED)
+        threading.Thread(target=self._audio_thread, args=(quality,), daemon=True).start()
+
+    def _start_video(self):
+        import shutil
+        # ffmpeg is mandatory: YouTube serves 720p+ as separate video-only and
+        # audio-only streams that must be merged. Detect it early so the user
+        # gets an actionable message instead of a silent 360p fallback.
+        if not shutil.which('ffmpeg'):
+            self._status(
+                "ffmpeg not found — it is required to merge the separate video "
+                "and audio streams that YouTube uses for 720p and above.\n"
+                "Install ffmpeg from https://ffmpeg.org and ensure it is in your PATH.",
+                self.C_ERROR,
             )
-            label.pack(side="left")
+            return
 
-            value = customtkinter.CTkLabel(
-                row_frame,
-                text=value_text,
-                font=customtkinter.CTkFont(size=13),
-                anchor="w"
-            )
-            value.pack(side="left", padx=5)
+        quality_str = self.video_combo.get()
+        quality     = quality_str.split('p')[0]   # "1080p" -> "1080", "2160p (4K)" -> "2160"
+        self._lock()
+        self.opts_frame.grid_remove()
+        self._clear_opts()
+        self._init_progress()
+        self._status(f"Downloading MP4 at {quality_str}\u2026", self.C_MUTED)
+        threading.Thread(target=self._video_thread, args=(quality,), daemon=True).start()
 
-        # Show format selection buttons
-        self.format_frame.pack(pady=15)
-        self.info_btn.configure(state="normal")
-
-    def validate_url(self, url):
-        """Validate YouTube URL format."""
-        if not url or not url.strip():
-            return False, "Please enter a URL"
-
-        # Basic YouTube URL validation
-        youtube_regex = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        if not re.match(youtube_regex, url):
-            return False, "Please enter a valid YouTube URL"
-
-        return True, ""
-
-    def show_audio_options(self):
-        """Display audio quality selection options."""
-        self.clear_dynamic_widgets()
-        self.options_frame.pack(pady=10)
-
-        label = customtkinter.CTkLabel(
-            self.options_frame,
-            text="Select audio quality (kbps):",
-            font=customtkinter.CTkFont(size=16)
-        )
-        label.pack(side="left", padx=20)
-        self.dynamic_widgets.append(label)
-
-        self.audio_quality_combo = customtkinter.CTkComboBox(
-            self.options_frame,
-            values=["128", "192", "256", "320"],
-            width=200,
-            height=35,
-            font=customtkinter.CTkFont(size=14),
-            state="readonly"
-        )
-        self.audio_quality_combo.set("192")  # Default value
-        self.audio_quality_combo.pack(side="left", padx=10)
-        self.dynamic_widgets.append(self.audio_quality_combo)
-
-        download_btn = customtkinter.CTkButton(
-            self.options_frame,
-            text="Download",
-            command=lambda: self.download_audio(self.audio_quality_combo.get()),
-            width=150,
-            height=35,
-            font=customtkinter.CTkFont(size=14, weight="bold")
-        )
-        download_btn.pack(side="left", padx=10)
-        self.dynamic_widgets.append(download_btn)
-
-    def show_video_options(self):
-        """Display video quality selection options."""
-        self.clear_dynamic_widgets()
-        self.options_frame.pack(pady=10)
-
-        label = customtkinter.CTkLabel(
-            self.options_frame,
-            text="Select video quality (resolution):",
-            font=customtkinter.CTkFont(size=16)
-        )
-        label.pack(side="left", padx=20)
-        self.dynamic_widgets.append(label)
-
-        self.video_quality_combo = customtkinter.CTkComboBox(
-            self.options_frame,
-            values=["360p", "480p", "720p", "1080p", "1440p", "2160p (4K)"],
-            width=200,
-            height=35,
-            font=customtkinter.CTkFont(size=14),
-            state="readonly"
-        )
-        self.video_quality_combo.set("720p")  # Default value
-        self.video_quality_combo.pack(side="left", padx=10)
-        self.dynamic_widgets.append(self.video_quality_combo)
-
-        download_btn = customtkinter.CTkButton(
-            self.options_frame,
-            text="Download",
-            command=lambda: self.download_video(self.video_quality_combo.get()),
-            width=150,
-            height=35,
-            font=customtkinter.CTkFont(size=14, weight="bold")
-        )
-        download_btn.pack(side="left", padx=10)
-        self.dynamic_widgets.append(download_btn)
-
-    def show_status(self, message, is_error=False):
-        """Display status message."""
-        for widget in self.status_frame.winfo_children():
-            widget.destroy()
-
-        color = "#FF5555" if is_error else "#50C878"
-
-        status_label = customtkinter.CTkLabel(
-            self.status_frame,
-            text=message,
-            font=customtkinter.CTkFont(size=16),
-            text_color=color
-        )
-        status_label.pack(expand=True)
-
-    def show_error(self, message):
-        """Display error message."""
-        self.show_status(message, is_error=True)
-
-    def download_audio(self, quality):
-        """Download audio in a separate thread."""
-        # Disable buttons during download
-        self.audio_btn.configure(state="disabled")
-        self.video_btn.configure(state="disabled")
-
-        self.show_status(f"Downloading audio at {quality} kbps...")
-
-        thread = threading.Thread(target=self._download_audio_thread, args=(quality,))
-        thread.daemon = True
-        thread.start()
-
-    def _download_audio_thread(self, quality):
-        """Thread function for audio download."""
+    def _audio_thread(self, quality):
+        url     = self.url_entry.get().strip()
+        outtmpl = os.path.join(self.download_dir, '%(title)s [%(id)s].%(ext)s')
         try:
-            url = self.url_entry.get().strip()
-
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'postprocessors': [
-                    {
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': quality,
-                    },
-                    {
-                        'key': 'FFmpegMetadata',
-                        'add_metadata': True,
-                    },
-                    {
-                        'key': 'EmbedThumbnail',
-                        'already_have_thumbnail': False,
-                    },
-                ],
-                'outtmpl': '%(title)s.%(ext)s',
-                'restrictfilenames': True,
+            os.makedirs(self.download_dir, exist_ok=True)
+            with YoutubeDL({
+                'format':        'bestaudio/best',
+                'outtmpl':       outtmpl,
                 'writethumbnail': True,
-                'ignoreerrors': False,
-                'quiet': True,
-                'no_warnings': True,
-            }
+                'postprocessors': [
+                    # 1. Extract and re-encode audio to MP3 at chosen bitrate
+                    {'key': 'FFmpegExtractAudio',
+                     'preferredcodec': 'mp3', 'preferredquality': quality},
+                    # 2. Write ID3 / metadata tags
+                    {'key': 'FFmpegMetadata', 'add_metadata': True},
+                    # 3. Embed thumbnail as album art (requires mutagen)
+                    {'key': 'EmbedThumbnail', 'already_have_thumbnail': False},
+                ],
+                'quiet':          True,
+                'no_warnings':    True,
+                'progress_hooks': [self._on_progress],
+            }) as ydl:
+                info = ydl.extract_info(url, download=True)
+            self.app.after(0, self._on_done, info.get('title', 'Unknown'))
+        except Exception as exc:
+            self.app.after(0, self._on_error, str(exc))
 
-            with YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
-                title = info_dict.get('title', 'Unknown')
-
-                self.app.after(0, self.show_status, f"✓ Audio downloaded successfully!\nTitle: {title}\n\nReady for next download.")
-                self.app.after(0, self.clear_dynamic_widgets)
-                self.app.after(0, self.enable_buttons)
-
-        except Exception as e:
-            error_msg = f"Download failed: {str(e)}"
-            self.app.after(0, self.show_error, error_msg)
-            self.app.after(0, self.enable_buttons)
-
-    def download_video(self, quality_str):
-        """Download video in a separate thread."""
-        # Disable buttons during download
-        self.audio_btn.configure(state="disabled")
-        self.video_btn.configure(state="disabled")
-
-        self.show_status(f"Downloading video at {quality_str}...")
-
-        # Extract numeric quality
-        quality = quality_str.split('p')[0].split('(')[0].strip()
-
-        thread = threading.Thread(target=self._download_video_thread, args=(quality,))
-        thread.daemon = True
-        thread.start()
-
-    def _download_video_thread(self, quality):
-        """Thread function for video download."""
+    def _video_thread(self, quality):
+        url     = self.url_entry.get().strip()
+        outtmpl = os.path.join(self.download_dir, '%(title)s [%(id)s].%(ext)s')
         try:
-            url = self.url_entry.get().strip()
-
-            ydl_opts = {
-                'format': f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best',
-                'postprocessors': [
-                    {
-                        'key': 'FFmpegVideoConvertor',
-                        'preferedformat': 'mp4',
-                    },
-                    {
-                        'key': 'FFmpegMetadata',
-                        'add_metadata': True,
-                    },
-                    {
-                        'key': 'EmbedThumbnail',
-                        'already_have_thumbnail': False,
-                    },
-                ],
-                'outtmpl': '%(title)s.%(ext)s',
-                'restrictfilenames': True,
+            os.makedirs(self.download_dir, exist_ok=True)
+            with YoutubeDL({
+                # [acodec=none] selects video-ONLY streams (no embedded audio).
+                # [vcodec=none] selects audio-ONLY streams (no embedded video).
+                # Together they explicitly exclude YouTube's pre-merged combined
+                # streams, which top out at ~480p. ffmpeg (confirmed present by
+                # _start_video) merges the two streams into a single mp4.
+                #
+                # The fallback after '/' drops the height cap: if the video has
+                # no stream at the requested height (e.g. a 720p-max upload
+                # selected at 1080p) we still get the best available quality
+                # rather than an error or a silent 360p combined fallback.
+                'format': (
+                    f'bestvideo[acodec=none][height<={quality}]'
+                    f'+bestaudio[vcodec=none]'
+                    f'/bestvideo[acodec=none]+bestaudio[vcodec=none]'
+                ),
+                'merge_output_format': 'mp4',
+                'outtmpl':        outtmpl,
                 'writethumbnail': True,
-                'ignoreerrors': False,
-                'quiet': True,
-                'no_warnings': True,
-            }
+                'postprocessors': [
+                    {'key': 'FFmpegMetadata', 'add_metadata': True},
+                    {'key': 'EmbedThumbnail', 'already_have_thumbnail': False},
+                ],
+                'quiet':          True,
+                'no_warnings':    True,
+                'progress_hooks': [self._on_progress],
+            }) as ydl:
+                info = ydl.extract_info(url, download=True)
+            actual = self._actual_height(info)
+            title  = info.get('title', 'Unknown')
+            self.app.after(0, self._on_done, title, actual)
+        except Exception as exc:
+            self.app.after(0, self._on_error, str(exc))
 
-            with YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
-                title = info_dict.get('title', 'Unknown')
+    @staticmethod
+    def _actual_height(info):
+        """Return the video height that was actually downloaded, or None."""
+        for fmt in (info.get('requested_formats') or []):
+            if fmt.get('vcodec') not in (None, 'none'):
+                return fmt.get('height')
+        return info.get('height')
 
-                self.app.after(0, self.show_status, f"✓ Video downloaded successfully!\nTitle: {title}\n\nReady for next download.")
-                self.app.after(0, self.clear_dynamic_widgets)
-                self.app.after(0, self.enable_buttons)
+    def _on_done(self, title, height=None):
+        self.prog_frame.grid_remove()
+        self._status_success(title, height)
+        self._unlock()
 
-        except Exception as e:
-            error_msg = f"Download failed: {str(e)}"
-            self.app.after(0, self.show_error, error_msg)
-            self.app.after(0, self.enable_buttons)
+    def _on_error(self, msg):
+        self.prog_frame.grid_remove()
+        self._status(f"Download failed: {msg}", self.C_ERROR)
+        self._unlock()
 
-    def enable_buttons(self):
-        """Re-enable download buttons."""
-        self.audio_btn.configure(state="normal")
-        self.video_btn.configure(state="normal")
-
-    def reset_ui(self):
-        """Reset the UI to initial state."""
-        self.url_entry.delete(0, 'end')
-        self.clear_dynamic_widgets()
-
-        # Clear info display
-        for widget in self.info_display_frame.winfo_children():
-            widget.destroy()
-
-        for widget in self.status_frame.winfo_children():
-            widget.destroy()
-
-        # Hide format frame and options frame
-        self.format_frame.pack_forget()
-        self.options_frame.pack_forget()
-
-        self.enable_buttons()
-
-        # Reset video info
-        self.video_info = None
-        if self.thumbnail_path and os.path.exists(self.thumbnail_path):
-            try:
-                os.remove(self.thumbnail_path)
-            except:
-                pass
-        self.thumbnail_path = None
+    # ═══════════════════════════════════════════════════════ MAIN ════════════
 
     def run(self):
-        """Start the application."""
         self.app.mainloop()
 
 
 if __name__ == "__main__":
-    downloader = YouTubeDownloader()
-    downloader.run()
+    YouTubeDownloader().run()
