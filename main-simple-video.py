@@ -1,73 +1,99 @@
+import shutil
 from yt_dlp import YoutubeDL
 
-def download_video(url):
-    """Download YouTube video in MP4 format (up to 720p)."""
+
+def download_video(url: str, max_height: int = 1080) -> bool:
     if not url or not url.strip():
-        print("Error: URL cannot be empty!")
+        print("Error: URL cannot be empty.")
         return False
 
+    # ffmpeg is required to merge the separate video and audio streams.
+    if not shutil.which('ffmpeg'):
+        print(
+            "Error: ffmpeg was not found.\n"
+            "ffmpeg is required to merge the separate video and audio streams\n"
+            "that YouTube uses for 720p and above.\n"
+            "Install it from https://ffmpeg.org and make sure it is in your PATH."
+        )
+        return False
+
+    ydl_opts = {
+        # ── Format selection ──────────────────────────────────────────────────
+        # [acodec=none]  = video-only (no embedded audio) — excludes combined streams
+        # [vcodec=none]  = audio-only (no embedded video) — excludes combined streams
+        'format': (
+            f'bestvideo[acodec=none][height<={max_height}]'
+            f'+bestaudio[vcodec=none]'
+            f'/bestvideo[acodec=none]+bestaudio[vcodec=none]'
+        ),
+        # Remux merged streams into mp4 without re-encoding the video track.
+        # ffmpeg re-encodes audio only when necessary (e.g. Opus → AAC).
+        'merge_output_format': 'mp4',
+
+        # ── Output ────────────────────────────────────────────────────────────
+        'outtmpl':          '%(title)s [%(id)s].%(ext)s',
+        'restrictfilenames': True,   # replace spaces / special chars
+
+        # ── Post-processing ───────────────────────────────────────────────────
+        'writethumbnail': True,
+        'postprocessors': [
+            # Embed video title, uploader, date, etc. into the mp4 container
+            {'key': 'FFmpegMetadata', 'add_metadata': True},
+            # Embed thumbnail as cover art (requires mutagen; skipped if absent)
+            {'key': 'EmbedThumbnail', 'already_have_thumbnail': False},
+        ],
+
+        # ── Extraction ────────────────────────────────────────────────────────
+        # android_vr is the default yt-dlp YouTube client and provides
+        # separate high-quality streams without needing a JS runtime.
+        'extractor_args': {
+            'youtube': {'player_client': ['android_vr']},
+        },
+
+        # ── Reliability ───────────────────────────────────────────────────────
+        'socket_timeout':  30,
+        'ignoreerrors':    False,
+        'quiet':           False,
+        'no_warnings':     False,
+    }
+
+    print(f"Downloading up to {max_height}p MP4…")
     try:
-        ydl_opts = {
-            'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-            'postprocessors': [
-                {
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                },
-                {
-                    'key': 'FFmpegMetadata',
-                    'add_metadata': True,
-                },
-                {
-                    'key': 'EmbedThumbnail',
-                    'already_have_thumbnail': False,
-                },
-            ],
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            },
-            'socket_timeout': 30,
-            'ignoreerrors': False,
-            'outtmpl': '%(title)s.%(ext)s',
-            'restrictfilenames': True,
-            'writethumbnail': True,
-            'quiet': False,
-            'no_warnings': False,
-            'extractor_args': {
-                'youtube': {
-                    # Use android client to bypass SABR streaming and bot detection
-                    # Note: Without PO token, may be limited to lower quality formats (360p-720p)
-                    'player_client': ['android'],
-                }
-            },
-        }
-
-        print("Attempting to download video...")
         with YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            video_title = info_dict.get('title', 'Unknown')
+            info = ydl.extract_info(url, download=True)
 
-            print(f"\n'{video_title}' downloaded as MP4 successfully!")
-            return True
+        title = info.get('title', 'Unknown')
 
-    except Exception as e:
-        print(f"\nAn error occurred: {str(e)}")
+        # Report the resolution that was actually downloaded
+        actual_height = None
+        for fmt in (info.get('requested_formats') or []):
+            if fmt.get('vcodec') not in (None, 'none'):
+                actual_height = fmt.get('height')
+                break
+        if actual_height is None:
+            actual_height = info.get('height')
+
+        res_str = f" at {actual_height}p" if actual_height else ""
+        print(f"\n'{title}' downloaded successfully{res_str}!")
+        return True
+
+    except Exception as exc:
+        print(f"\nDownload failed: {exc}")
         print("\nTroubleshooting tips:")
-        print("1. Make sure your internet connection is stable")
-        print("2. Try updating yt-dlp: pip install --upgrade yt-dlp")
-        print("3. Try a different video or check if the URL is correct")
-        print("4. YouTube may be blocking requests - try again in a few moments")
+        print("  1. Check that your internet connection is stable.")
+        print("  2. Update yt-dlp:  pip install --upgrade yt-dlp")
+        print("  3. Verify the URL is correct and the video is publicly available.")
+        print("  4. If YouTube is blocking requests, wait a moment and try again.")
         return False
 
 
 if __name__ == "__main__":
     print("=== YouTube Video Downloader ===")
-    video_url = input("\nEnter the YouTube video URL: ")
-    print("\nDownloading...\n")
-
-    if download_video(video_url):
-        print("---------------------------------")
+    video_url = input("\nEnter the YouTube video URL: ").strip()
+    print()
+    success = download_video(video_url)
+    print("-" * 40)
+    if success:
         print("Thank you for using the YouTube Downloader!")
     else:
-        print("---------------------------------")
-        print("Download failed. Please try again.") 
+        print("Download failed. Please try again.")
