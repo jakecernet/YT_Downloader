@@ -2,62 +2,79 @@ import shutil
 from yt_dlp import YoutubeDL
 
 
-def download_video(url: str, max_height: int = 1080) -> bool:
-    if not url or not url.strip():
-        print("Error: URL cannot be empty.")
-        return False
-
-    # ffmpeg is required to merge the separate video and audio streams.
+def check_requirements() -> bool:
+    """Verify ffmpeg (required) and check for deno (recommended for YouTube)."""
     if not shutil.which('ffmpeg'):
         print(
             "Error: ffmpeg was not found.\n"
-            "ffmpeg is required to merge the separate video and audio streams\n"
-            "that YouTube uses for 720p and above.\n"
+            "ffmpeg is required to merge separate video/audio streams and to remux files.\n"
             "Install it from https://ffmpeg.org and make sure it is in your PATH."
         )
         return False
 
+    # yt-dlp supports several JS runtimes for solving YouTube's challenges.
+    # Deno is enabled by default; the others need --js-runtimes to be enabled
+    # but are still worth detecting so we don't nag people who already have one.
+    js_runtimes = ('deno', 'node', 'bun', 'quickjs')
+    if not any(shutil.which(rt) for rt in js_runtimes):
+        print(
+            "Note: no supported JavaScript runtime (deno, node, bun, or quickjs) was found on your PATH.\n"
+            "YouTube now requires one of these to fetch some/all formats\n"
+            "(other sites are unaffected). Deno is recommended and used automatically\n"
+            "by yt-dlp once installed — no extra flags needed. Get it from:\n"
+            "  https://docs.deno.com/runtime/getting_started/installation/\n"
+        )
+
+    return True
+
+
+def download_video(url: str, max_height: int | None = None) -> bool:
+    """
+    Download the highest quality video from any site yt-dlp supports
+    (YouTube, Vimeo, Twitter/X, TikTok, etc.), merging video+audio into
+    a single MP4 file.
+
+    max_height: optional cap (e.g. 1080). Leave as None for the highest
+    quality available.
+    """
+    if not url or not url.strip():
+        print("Error: URL cannot be empty.")
+        return False
+
+    if not check_requirements():
+        return False
+
+    height_filter = f'[height<={max_height}]' if max_height else ''
+
     ydl_opts = {
-        # ── Format selection ──────────────────────────────────────────────────
-        # [acodec=none]  = video-only (no embedded audio) — excludes combined streams
-        # [vcodec=none]  = audio-only (no embedded video) — excludes combined streams
-        'format': (
-            f'bestvideo[acodec=none][height<={max_height}]'
-            f'+bestaudio[vcodec=none]'
-            f'/bestvideo[acodec=none]+bestaudio[vcodec=none]'
-        ),
-        # Remux merged streams into mp4 without re-encoding the video track.
-        # ffmpeg re-encodes audio only when necessary (e.g. Opus → AAC).
+        # ── Format selection ──────────────────────────────────────────────
+        # bv* = best video, INCLUDING formats that already contain audio
+        #       (needed for sites that don't split streams the way YouTube does)
+        # ba  = best standalone audio track
+        # /b  = fall back to the single best pre-merged format if the above
+        #       selectors find nothing suitable
+        'format': f'bv*{height_filter}+ba/b{height_filter}',
         'merge_output_format': 'mp4',
 
-        # ── Output ────────────────────────────────────────────────────────────
-        'outtmpl':          '%(title)s [%(id)s].%(ext)s',
-        'restrictfilenames': True,   # replace spaces / special chars
+        # ── Output ────────────────────────────────────────────────────────
+        'outtmpl': '%(title)s [%(id)s].%(ext)s',
+        'restrictfilenames': False,  # keep spaces instead of turning them into underscores
 
-        # ── Post-processing ───────────────────────────────────────────────────
+        # ── Post-processing ───────────────────────────────────────────────
         'writethumbnail': True,
         'postprocessors': [
-            # Embed video title, uploader, date, etc. into the mp4 container
             {'key': 'FFmpegMetadata', 'add_metadata': True},
-            # Embed thumbnail as cover art (requires mutagen; skipped if absent)
             {'key': 'EmbedThumbnail', 'already_have_thumbnail': False},
         ],
 
-        # ── Extraction ────────────────────────────────────────────────────────
-        # android_vr is the default yt-dlp YouTube client and provides
-        # separate high-quality streams without needing a JS runtime.
-        'extractor_args': {
-            'youtube': {'player_client': ['android_vr']},
-        },
-
-        # ── Reliability ───────────────────────────────────────────────────────
-        'socket_timeout':  30,
-        'ignoreerrors':    False,
-        'quiet':           False,
-        'no_warnings':     False,
+        # ── Reliability ───────────────────────────────────────────────────
+        'socket_timeout': 30,
+        'ignoreerrors': False,
+        'quiet': False,
+        'no_warnings': False,
     }
 
-    print(f"Downloading up to {max_height}p MP4…")
+    print("Downloading highest available quality…")
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -82,18 +99,18 @@ def download_video(url: str, max_height: int = 1080) -> bool:
         print("\nTroubleshooting tips:")
         print("  1. Check that your internet connection is stable.")
         print("  2. Update yt-dlp:  pip install --upgrade yt-dlp")
-        print("  3. Verify the URL is correct and the video is publicly available.")
-        print("  4. If YouTube is blocking requests, wait a moment and try again.")
+        print("  3. Verify the URL is correct and the content is publicly available.")
+        print("  4. For YouTube specifically, make sure Deno is installed (see note above).")
         return False
 
 
 if __name__ == "__main__":
-    print("=== YouTube Video Downloader ===")
-    video_url = input("\nEnter the YouTube video URL: ").strip()
+    print("=== Universal Video Downloader ===")
+    video_url = input("\nEnter the video URL (any supported site): ").strip()
     print()
     success = download_video(video_url)
     print("-" * 40)
     if success:
-        print("Thank you for using the YouTube Downloader!")
+        print("Thank you for using the Video Downloader!")
     else:
         print("Download failed. Please try again.")

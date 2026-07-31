@@ -207,8 +207,6 @@ class YouTubeDownloader:
     def _validate_url(self, url):
         if not url or not url.strip():
             return False, "Please enter a URL."
-        if not re.match(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/', url):
-            return False, "Please enter a valid YouTube URL."
         return True, ""
 
     # ═══════════════════════════════════════════════════════ STATUS ═══════════
