@@ -1,9 +1,49 @@
+import os
+import platform
 import shutil
+import subprocess
 from yt_dlp import YoutubeDL
+
+JS_RUNTIMES = ('deno', 'node', 'bun', 'quickjs')
+
+
+def _deno_bin_dir() -> str:
+    """Directory Deno's official installer places the binary in."""
+    if platform.system() == 'Windows':
+        return os.path.join(os.environ.get('USERPROFILE', ''), '.deno', 'bin')
+    return os.path.join(os.path.expanduser('~'), '.deno', 'bin')
+
+
+def _install_deno() -> bool:
+    """Run Deno's official installer script for the current OS."""
+    system = platform.system()
+    try:
+        if system == 'Windows':
+            cmd = ['powershell', '-NoProfile', '-Command',
+                   'irm https://deno.land/install.ps1 | iex']
+        else:
+            cmd = ['sh', '-c', 'curl -fsSL https://deno.land/install.sh | sh']
+
+        print("Installing Deno…")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            print(f"Deno installer exited with an error:\n{result.stderr.strip()}")
+            return False
+    except Exception as exc:
+        print(f"Could not run the Deno installer automatically: {exc}")
+        return False
+
+    bin_dir = _deno_bin_dir()
+    exe = 'deno.exe' if system == 'Windows' else 'deno'
+    if os.path.exists(os.path.join(bin_dir, exe)):
+        # Make it usable immediately for the rest of this run.
+        os.environ['PATH'] = bin_dir + os.pathsep + os.environ.get('PATH', '')
+        return True
+    return False
 
 
 def check_requirements() -> bool:
-    """Verify ffmpeg (required) and check for deno (recommended for YouTube)."""
+    """Verify ffmpeg (required) and ensure a JS runtime is available for YouTube."""
     if not shutil.which('ffmpeg'):
         print(
             "Error: ffmpeg was not found.\n"
@@ -15,15 +55,26 @@ def check_requirements() -> bool:
     # yt-dlp supports several JS runtimes for solving YouTube's challenges.
     # Deno is enabled by default; the others need --js-runtimes to be enabled
     # but are still worth detecting so we don't nag people who already have one.
-    js_runtimes = ('deno', 'node', 'bun', 'quickjs')
-    if not any(shutil.which(rt) for rt in js_runtimes):
+    if not any(shutil.which(rt) for rt in JS_RUNTIMES):
         print(
-            "Note: no supported JavaScript runtime (deno, node, bun, or quickjs) was found on your PATH.\n"
-            "YouTube now requires one of these to fetch some/all formats\n"
-            "(other sites are unaffected). Deno is recommended and used automatically\n"
-            "by yt-dlp once installed — no extra flags needed. Get it from:\n"
-            "  https://docs.deno.com/runtime/getting_started/installation/\n"
+            "No supported JavaScript runtime (deno, node, bun, or quickjs) was found on your PATH.\n"
+            "YouTube now requires one of these to fetch some/all formats (other sites are unaffected)."
         )
+        answer = input("Install Deno automatically now? [Y/n]: ").strip().lower()
+        if answer in ('', 'y', 'yes'):
+            if _install_deno():
+                print("Deno installed successfully.\n")
+            else:
+                print(
+                    "Automatic install didn't succeed. You can install manually from:\n"
+                    "  https://docs.deno.com/runtime/getting_started/installation/\n"
+                    "YouTube downloads may fail or be limited without it; other sites will still work.\n"
+                )
+        else:
+            print(
+                "Skipping install — YouTube downloads may fail or be limited.\n"
+                "Install manually anytime from: https://docs.deno.com/runtime/getting_started/installation/\n"
+            )
 
     return True
 
@@ -114,3 +165,13 @@ if __name__ == "__main__":
         print("Thank you for using the Video Downloader!")
     else:
         print("Download failed. Please try again.")
+
+    if platform.system() == 'Windows':
+        try:
+            import msvcrt
+            print("\nPress any key to exit...")
+            msvcrt.getch()
+        except Exception:
+            input("\nPress Enter to exit...")
+    else:
+        input("\nPress Enter to exit...")
