@@ -8,31 +8,32 @@ The script is cross-platform and can be run on Windows, Linux, and macOS. If you
 
 ## Features
 
--   Download YouTube videos and playlists as MP3 and MP4 files
--   Download YouTube Music playlists as MP3 and MP4 files
+- Download YouTube videos and playlists as MP3 and MP4 files
+- Download YouTube Music playlists as MP3 and MP4 files
 
 ## Requirements
 
--   Python 3.6 or higher if you're running the script from source
--   Windows 7 or higher if you're running the executable
--   FFmpeg must be installed and added to PATH (for converting videos to MP3/MP4, otherwise the script will download the video in WEBM format)
-    <br>
-    <br>
+- Python 3.6 or higher if you're running the script from source
+- Windows 7 or higher if you're running the executable
+- FFmpeg must be installed and added to PATH (for converting videos to MP3/MP4, otherwise the script will download the video in WEBM format)
+- Deno/Node.js must be installed and added to PATH https://github.com/yt-dlp/yt-dlp/wiki/EJS
+  <br>
+  <br>
 
 # Usage (Main)
 
 ### Windows:
 
--   Run the executable file
--   Select the preferred audio quality and format
--   Enter the URL of the YouTube video you want to download
--   The script will download the video and save it as an MP3 file in the folder where the executable is located
+- Run the executable file
+- Select the preferred audio quality and format
+- Enter the URL of the YouTube video you want to download
+- The script will download the video and save it as an MP3 file in the folder where the executable is located
 
 ### Linux/macOS:
 
--   Run the command: `pip install -r requirements.txt` to install the libraries
--   Run the command: `python main.py`
--   Do the same steps as in the Windows version
+- Run the command: `pip install -r requirements.txt` to install the libraries
+- Run the command: `python main.py`
+- Do the same steps as in the Windows version
 
 <br>
 <br>
@@ -41,15 +42,15 @@ The script is cross-platform and can be run on Windows, Linux, and macOS. If you
 
 ### Windows:
 
--   Run the executable file
--   Paste the URL of the YouTube video you want to download
--   The script will download the video and save it as an MP3 file in the folder where the executable is located at 192kbps
+- Run the executable file
+- Paste the URL of the YouTube video you want to download
+- The script will download the video and save it as an MP3 file in the folder where the executable is located at 192kbps
 
 ### Linux/macOS:
 
--   Run the command: `pip install -r requirements.txt` to install the libraries
--   Run the command: `python main-simple.py`
--   Do the same steps as in the Windows version
+- Run the command: `pip install -r requirements.txt` to install the libraries
+- Run the command: `python main-simple.py`
+- Do the same steps as in the Windows version
 
 # Building your own executable
 
