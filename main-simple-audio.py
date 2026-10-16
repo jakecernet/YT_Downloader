@@ -1,76 +1,139 @@
+import os
+import platform
 import shutil
+import subprocess
+import sys
 from yt_dlp import YoutubeDL
 
+JS_RUNTIMES = ('deno', 'node', 'bun', 'quickjs')
 
-def check_requirements() -> bool:
-    """Verify ffmpeg (required) and check for deno (recommended for YouTube)."""
-    if not shutil.which('ffmpeg'):
-        print(
-            "Error: ffmpeg was not found.\n"
-            "ffmpeg is required to extract/convert audio.\n"
-            "Install it from https://ffmpeg.org and make sure it is in your PATH."
-        )
-        return False
 
-    # yt-dlp supports several JS runtimes for solving YouTube's challenges.
-    # Deno is enabled by default; the others need --js-runtimes to be enabled
-    # but are still worth detecting so we don't nag people who already have one.
-    js_runtimes = ('deno', 'node', 'bun', 'quickjs')
-    if not any(shutil.which(rt) for rt in js_runtimes):
-        print(
-            "Note: no supported JavaScript runtime (deno, node, bun, or quickjs) was found on your PATH.\n"
-            "YouTube now requires one of these to fetch some/all formats\n"
-            "(other sites are unaffected). Deno is recommended and used automatically\n"
-            "by yt-dlp once installed — no extra flags needed. Get it from:\n"
-            "  https://docs.deno.com/runtime/getting_started/installation/\n"
-        )
+def _deno_bin_dir() -> str:
+    """Directory Deno's official installer places the binary in."""
+    home = os.environ.get('USERPROFILE', '') if platform.system() == 'Windows' else os.path.expanduser('~')
+    return os.path.join(home, '.deno', 'bin')
 
-    return True
+
+def _find_js_runtime() -> str | None:
+    """Return the name of an available JS runtime, or None."""
+    # Pick up a previous Deno install that isn't on PATH yet.
+    bin_dir = _deno_bin_dir()
+    if os.path.isdir(bin_dir) and bin_dir not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = bin_dir + os.pathsep + os.environ.get('PATH', '')
+    return next((rt for rt in JS_RUNTIMES if shutil.which(rt)), None)
+
+
+def _install_deno() -> None:
+    """Silently run Deno's official installer for the current OS."""
+    if platform.system() == 'Windows':
+        cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+               'irm https://deno.land/install.ps1 | iex']
+    else:
+        cmd = ['sh', '-c', 'curl -fsSL https://deno.land/install.sh | sh -s -- -y']
+    print("Installing Deno (one-time setup)…")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                stdin=subprocess.DEVNULL)
+        if result.returncode != 0:
+            print(f"Deno install failed:\n{result.stderr.strip()}")
+    except Exception as exc:
+        print(f"Deno install failed: {exc}")
+
+
+def ensure_js_runtime() -> str | None:
+    """Find a JS runtime, installing Deno automatically if none exists."""
+    runtime = _find_js_runtime()
+    if runtime:
+        return runtime
+    _install_deno()
+    runtime = _find_js_runtime()
+    if not runtime:
+        print("Could not set up a JavaScript runtime. YouTube downloads may fail; "
+              "other sites will still work.\n"
+              "Manual install: https://docs.deno.com/runtime/getting_started/installation/\n")
+    return runtime
+
+
+def _pip_install(package: str) -> bool:
+    base = [sys.executable, '-m', 'pip', 'install', '--quiet', package]
+    for extra in ([], ['--user', '--break-system-packages']):
+        try:
+            r = subprocess.run(base + extra, capture_output=True, text=True,
+                               timeout=600, stdin=subprocess.DEVNULL)
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def ensure_ffmpeg() -> bool:
+    """Make sure ffmpeg + ffprobe are available, downloading static builds if not."""
+    if shutil.which('ffmpeg') and shutil.which('ffprobe'):
+        return True
+
+    print("ffmpeg not found - downloading it automatically (one-time setup)...")
+    try:
+        try:
+            import static_ffmpeg
+        except ImportError:
+            if not _pip_install('static-ffmpeg'):
+                raise RuntimeError("could not install the static-ffmpeg package")
+            import static_ffmpeg
+        static_ffmpeg.add_paths()  # downloads binaries on first run, adds them to PATH
+    except Exception as exc:
+        print(f"Automatic ffmpeg setup failed: {exc}")
+
+    if shutil.which('ffmpeg') and shutil.which('ffprobe'):
+        print("ffmpeg ready.\n")
+        return True
+
+    print(
+        "Error: ffmpeg could not be set up automatically.\n"
+        "Install it manually from https://ffmpeg.org/download.html and make sure it is in your PATH."
+    )
+    return False
 
 
 def download_audio(url: str) -> bool:
     """
-    Download the highest quality audio from any site yt-dlp supports.
-
-    Output is always converted to MP3 (highest quality VBR). If the source
-    has no standalone audio track (video-only), the best available video
-    is downloaded first and the audio is extracted from it with ffmpeg.
+    Download the highest quality audio from any site yt-dlp supports,
+    converted to MP3 (best VBR).
     """
     if not url or not url.strip():
         print("Error: URL cannot be empty!")
         return False
 
-    if not check_requirements():
+    if not ensure_ffmpeg():
         return False
+
+    runtime = ensure_js_runtime()
 
     try:
         ydl_opts = {
-            # bestaudio = highest quality standalone audio track, if one exists
-            # /best     = otherwise fall back to the best combined format and
-            #             let the postprocessor below pull the audio out of it
             'format': 'bestaudio/best',
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '0',  # '0' = best VBR quality for mp3
+                    'preferredquality': '0',
                 },
-                {
-                    'key': 'FFmpegMetadata',
-                    'add_metadata': True,
-                },
-                {
-                    'key': 'EmbedThumbnail',
-                    'already_have_thumbnail': False,
-                },
+                {'key': 'FFmpegMetadata', 'add_metadata': True},
+                {'key': 'EmbedThumbnail', 'already_have_thumbnail': False},
             ],
             'outtmpl': '%(title)s.%(ext)s',
-            'restrictfilenames': False,  # keep spaces instead of turning them into underscores
+            'restrictfilenames': False,
             'writethumbnail': True,
             'quiet': False,
             'no_warnings': False,
             'ignoreerrors': False,
+
+            # Let yt-dlp fetch its YouTube challenge solver automatically.
+            'remote_components': ['ejs:github'],
         }
+        # Explicitly enable whichever runtime we found (only deno is on by default).
+        if runtime:
+            ydl_opts['js_runtimes'] = {runtime: {}}
 
         print("Downloading highest available audio quality…")
         with YoutubeDL(ydl_opts) as ydl:
@@ -85,7 +148,6 @@ def download_audio(url: str) -> bool:
         print("  1. Check that your internet connection is stable.")
         print("  2. Update yt-dlp:  pip install --upgrade yt-dlp")
         print("  3. Verify the URL is correct and the content is publicly available.")
-        print("  4. For YouTube specifically, make sure Deno is installed (see note above).")
         return False
 
 

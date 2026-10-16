@@ -1,14 +1,19 @@
 import customtkinter
 from yt_dlp import YoutubeDL
 import threading
-import re
 from PIL import Image
 import requests
 from io import BytesIO
 import os
 import sys
+import re
+import time
+import shutil
+import platform
 import tempfile
 import subprocess
+import importlib
+import importlib.metadata
 from tkinter import filedialog
 
 # ── Suppress console on frozen Windows builds ─────────────────────────────────
@@ -17,6 +22,41 @@ if sys.platform == 'win32' and getattr(sys, 'frozen', False):
     hWnd = ctypes.WinDLL('kernel32', use_last_error=True).GetConsoleWindow()
     if hWnd:
         ctypes.WinDLL('user32', use_last_error=True).ShowWindow(hWnd, 0)
+
+# ── Tool locations / helpers ──────────────────────────────────────────────────
+FROZEN           = getattr(sys, 'frozen', False)
+JS_RUNTIMES      = ('deno', 'node', 'bun', 'quickjs')
+CONFIG_DIR       = os.path.join(os.path.expanduser('~'), '.ytdl-gui')
+FFMPEG_PATH_FILE = os.path.join(CONFIG_DIR, 'ffmpeg_dir.txt')
+DENO_BIN         = os.path.join(os.path.expanduser('~'), '.deno', 'bin')
+_NOWIN           = {'creationflags': 0x08000000} if sys.platform == 'win32' else {}
+
+
+def _prepend_path(d):
+    if d and os.path.isdir(d) and d not in os.environ.get('PATH', '').split(os.pathsep):
+        os.environ['PATH'] = d + os.pathsep + os.environ.get('PATH', '')
+
+
+def _bootstrap_path():
+    """Make previously installed Deno / ffmpeg visible to this process."""
+    _prepend_path(DENO_BIN)
+    try:
+        with open(FFMPEG_PATH_FILE, encoding='utf-8') as f:
+            _prepend_path(f.read().strip())
+    except OSError:
+        pass
+
+
+def _js_opts():
+    """yt-dlp options that enable a JS runtime + the YouTube challenge solver."""
+    opts = {'remote_components': ['ejs:github']}
+    rt = next((r for r in JS_RUNTIMES if shutil.which(r)), None)
+    if rt:
+        opts['js_runtimes'] = {rt: {}}
+    return opts
+
+
+_bootstrap_path()
 
 customtkinter.set_appearance_mode("dark")
 customtkinter.set_default_color_theme("dark-blue")
@@ -30,6 +70,7 @@ class YouTubeDownloader:
     C_SUCCESS = "#50C878"
     C_ERROR   = "#FF5555"
     C_LINK    = "#6BA3D6"
+    C_WARN    = "#E6B800"
 
     def __init__(self):
         self.app = customtkinter.CTk()
@@ -43,6 +84,11 @@ class YouTubeDownloader:
         self.progress_bar    = None
         self.progress_label  = None
         self.download_dir    = os.path.join(os.path.expanduser("~"), "Downloads")
+        self.tool_win        = None
+        self.tool_rows       = {}
+        self.tool_busy       = False
+        self.restart_btn     = None
+        self._warn_shown     = False
 
         self._build_ui()
 
@@ -167,6 +213,16 @@ class YouTubeDownloader:
         )
         self.status_bar.grid(row=7, column=0, padx=30, pady=(4, 14))
         self.status_bar.pack_propagate(False)
+
+        # ── Tools button (top-right) ──────────────────────────────────────────
+        customtkinter.CTkButton(
+            self.app, text="⚙  Tools", command=self._open_tools,
+            width=90, height=30, corner_radius=8,
+            font=customtkinter.CTkFont(size=12, weight="bold"),
+            fg_color="#333333", hover_color="#444444"
+        ).place(relx=1.0, x=-18, y=16, anchor="ne")
+
+        self.app.after(400, self._startup_check)
 
     # ═══════════════════════════════════════════════════════ HELPERS ══════════
 
@@ -301,7 +357,7 @@ class YouTubeDownloader:
     def _fetch_thread(self):
         try:
             url = self.url_entry.get().strip()
-            with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True}) as ydl:
+            with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True, **_js_opts()}) as ydl:
                 info = ydl.extract_info(url, download=False)
             self.video_info = info
 
@@ -451,6 +507,8 @@ class YouTubeDownloader:
     # ═══════════════════════════════════════════════════════ DOWNLOAD ═════════
 
     def _start_audio(self):
+        if not self._require_ffmpeg():
+            return
         quality = self.audio_combo.get().split()[0]   # "192 kbps" → "192"
         self._lock()
         self.opts_frame.grid_remove()
@@ -460,17 +518,7 @@ class YouTubeDownloader:
         threading.Thread(target=self._audio_thread, args=(quality,), daemon=True).start()
 
     def _start_video(self):
-        import shutil
-        # ffmpeg is mandatory: YouTube serves 720p+ as separate video-only and
-        # audio-only streams that must be merged. Detect it early so the user
-        # gets an actionable message instead of a silent 360p fallback.
-        if not shutil.which('ffmpeg'):
-            self._status(
-                "ffmpeg not found — it is required to merge the separate video "
-                "and audio streams that YouTube uses for 720p and above.\n"
-                "Install ffmpeg from https://ffmpeg.org and ensure it is in your PATH.",
-                self.C_ERROR,
-            )
+        if not self._require_ffmpeg():
             return
 
         quality_str = self.video_combo.get()
@@ -503,6 +551,7 @@ class YouTubeDownloader:
                 'quiet':          True,
                 'no_warnings':    True,
                 'progress_hooks': [self._on_progress],
+                **_js_opts(),
             }) as ydl:
                 info = ydl.extract_info(url, download=True)
             self.app.after(0, self._on_done, info.get('title', 'Unknown'))
@@ -540,6 +589,7 @@ class YouTubeDownloader:
                 'quiet':          True,
                 'no_warnings':    True,
                 'progress_hooks': [self._on_progress],
+                **_js_opts(),
             }) as ydl:
                 info = ydl.extract_info(url, download=True)
             actual = self._actual_height(info)
@@ -565,6 +615,358 @@ class YouTubeDownloader:
         self.prog_frame.grid_remove()
         self._status(f"Download failed: {msg}", self.C_ERROR)
         self._unlock()
+
+    # ═══════════════════════════════════════════════════════ TOOLS ════════════
+    # yt-dlp / Deno / ffmpeg: status, install, update — each with a progress bar.
+
+    TOOLS = (
+        ("ytdlp",  "yt-dlp", "Download engine"),
+        ("deno",   "Deno",   "JavaScript runtime — needed for YouTube"),
+        ("ffmpeg", "ffmpeg", "Merges video + audio and converts to MP3"),
+    )
+
+    def _ui(self, fn, *a):
+        """Run fn(*a) on the Tk thread (safe to call from worker threads)."""
+        try:
+            self.app.after(0, lambda: fn(*a))
+        except Exception:
+            pass
+
+    def _row(self, key):
+        try:
+            if self.tool_win is None or not self.tool_win.winfo_exists():
+                return None
+            return self.tool_rows.get(key)
+        except Exception:
+            return None
+
+    def _startup_check(self):
+        missing = []
+        if not shutil.which('ffmpeg'):
+            missing.append("ffmpeg")
+        if not any(shutil.which(r) for r in JS_RUNTIMES):
+            missing.append("a JavaScript runtime (Deno)")
+        if missing:
+            self._warn_shown = True
+            self._status(f"⚠  Missing: {' and '.join(missing)} — open  ⚙ Tools  to install.",
+                         self.C_WARN)
+        elif self._warn_shown:
+            self._warn_shown = False
+            self._status("")
+
+    def _require_ffmpeg(self):
+        if shutil.which('ffmpeg'):
+            return True
+        self._status("ffmpeg not found — install it from the Tools window.", self.C_ERROR)
+        self._open_tools()
+        return False
+
+    # ── Tools window ──────────────────────────────────────────────────────────
+
+    def _open_tools(self):
+        if self.tool_win is not None and self.tool_win.winfo_exists():
+            self.tool_win.lift()
+            self.tool_win.focus()
+            return
+
+        win = customtkinter.CTkToplevel(self.app)
+        win.title("Tools")
+        win.geometry("700x500")
+        win.resizable(False, False)
+        win.transient(self.app)
+        self.tool_win = win
+
+        customtkinter.CTkLabel(
+            win, text="Tools & dependencies",
+            font=customtkinter.CTkFont(size=18, weight="bold")
+        ).pack(pady=(16, 2))
+        customtkinter.CTkLabel(
+            win, text="Install or update what the downloader needs",
+            font=customtkinter.CTkFont(size=12), text_color=self.C_MUTED
+        ).pack(pady=(0, 8))
+
+        self.tool_rows = {}
+        for key, name, desc in self.TOOLS:
+            card = customtkinter.CTkFrame(win, corner_radius=10)
+            card.pack(fill="x", padx=20, pady=6)
+
+            top = customtkinter.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=14, pady=(10, 2))
+
+            left = customtkinter.CTkFrame(top, fg_color="transparent")
+            left.pack(side="left")
+            customtkinter.CTkLabel(
+                left, text=name, anchor="w",
+                font=customtkinter.CTkFont(size=14, weight="bold")
+            ).pack(anchor="w")
+            status = customtkinter.CTkLabel(
+                left, text="Checking…", anchor="w",
+                font=customtkinter.CTkFont(size=12), text_color=self.C_MUTED
+            )
+            status.pack(anchor="w")
+
+            btn = customtkinter.CTkButton(
+                top, text="…", width=120, height=32, state="disabled",
+                font=customtkinter.CTkFont(size=13, weight="bold"), corner_radius=8,
+                command=lambda k=key: self._tool_action(k)
+            )
+            btn.pack(side="right")
+
+            bar = customtkinter.CTkProgressBar(card, width=630, height=10,
+                                               corner_radius=5, mode="determinate")
+            bar.set(0)
+            bar.pack(padx=14, pady=(6, 2))
+
+            detail = customtkinter.CTkLabel(
+                card, text=desc, wraplength=620,
+                font=customtkinter.CTkFont(size=11), text_color=self.C_MUTED
+            )
+            detail.pack(pady=(0, 10))
+
+            self.tool_rows[key] = {'status': status, 'btn': btn, 'bar': bar, 'detail': detail}
+
+        self.restart_btn = customtkinter.CTkButton(
+            win, text="↻  Restart app to use the new yt-dlp",
+            command=self._restart, height=34, corner_radius=8,
+            fg_color=self.C_GREEN, hover_color=self.C_GREEN_H,
+            font=customtkinter.CTkFont(size=13, weight="bold")
+        )  # packed only when a restart is needed
+
+        win.after(150, win.focus)
+        self._refresh_tools()
+
+    def _restart(self):
+        args = [sys.executable] + (sys.argv[1:] if FROZEN else sys.argv)
+        subprocess.Popen(args)
+        self.app.destroy()
+        sys.exit(0)
+
+    # ── Status probing ────────────────────────────────────────────────────────
+
+    def _refresh_tools(self):
+        threading.Thread(target=self._refresh_thread, daemon=True).start()
+
+    def _refresh_thread(self):
+        for key in ("ytdlp", "deno", "ffmpeg"):
+            try:
+                installed, latest = getattr(self, f"_probe_{key}")()
+            except Exception:
+                installed, latest = None, None
+            self._ui(self._apply_probe, key, installed, latest)
+
+    @staticmethod
+    def _running_ytdlp():
+        from yt_dlp.version import __version__
+        return __version__
+
+    def _probe_ytdlp(self):
+        try:
+            installed = importlib.metadata.version('yt-dlp')
+        except Exception:
+            installed = self._running_ytdlp()
+        latest = None
+        try:
+            latest = requests.get("https://pypi.org/pypi/yt-dlp/json",
+                                  timeout=8).json()["info"]["version"]
+        except Exception:
+            pass
+        return installed, latest
+
+    def _probe_deno(self):
+        exe = shutil.which('deno')
+        if not exe:
+            return None, None
+        out = subprocess.run([exe, '--version'], capture_output=True, text=True,
+                             timeout=10, **_NOWIN).stdout
+        m = re.search(r'deno (\S+)', out)
+        installed = m.group(1) if m else "unknown"
+        latest = None
+        try:
+            latest = requests.get("https://api.github.com/repos/denoland/deno/releases/latest",
+                                  timeout=8).json()["tag_name"].lstrip('v')
+        except Exception:
+            pass
+        return installed, latest
+
+    def _probe_ffmpeg(self):
+        exe = shutil.which('ffmpeg')
+        if not exe:
+            return None, None
+        out = subprocess.run([exe, '-version'], capture_output=True, text=True,
+                             timeout=10, **_NOWIN).stdout
+        m = re.search(r'ffmpeg version (\S+)', out)
+        return (m.group(1) if m else "unknown"), None
+
+    def _apply_probe(self, key, installed, latest):
+        row = self._row(key)
+        if not row:
+            return
+        norm = lambda v: (v or '').lstrip('v')
+        if installed is None:
+            text, color, btn, ok = "Not installed", self.C_ERROR, "Install", True
+        elif latest and norm(latest) != norm(installed):
+            text, color, btn, ok = (f"v{installed}  ·  update available (v{norm(latest)})",
+                                    self.C_WARN, "Update", True)
+        elif latest:
+            text, color, btn, ok = f"v{installed}  ·  up to date", self.C_SUCCESS, "Up to date", False
+        elif key == 'ffmpeg':
+            text, color, btn, ok = f"v{installed}  ·  installed", self.C_SUCCESS, "Installed", False
+        else:
+            text, color, btn, ok = f"v{installed}", self.C_SUCCESS, "Update", True
+
+        if key == 'ytdlp' and installed and installed != self._running_ytdlp():
+            text += "  ·  restart needed"
+            self.restart_btn.pack(pady=(6, 10))
+
+        row['status'].configure(text=text, text_color=color)
+        row['btn'].configure(text=btn, state="normal" if (ok and not self.tool_busy) else "disabled")
+
+    # ── Install / update plumbing ─────────────────────────────────────────────
+
+    def _tool_prog(self, key, frac=None, text="", color=None):
+        """frac=None → indeterminate (animated) bar; otherwise 0..1."""
+        def apply():
+            row = self._row(key)
+            if not row:
+                return
+            bar = row['bar']
+            if frac is None:
+                if bar.cget('mode') != 'indeterminate':
+                    bar.configure(mode='indeterminate')
+                    bar.start()
+            else:
+                if bar.cget('mode') != 'determinate':
+                    bar.stop()
+                    bar.configure(mode='determinate')
+                bar.set(max(0.0, min(frac, 1.0)))
+            row['detail'].configure(text=text, text_color=color or self.C_MUTED)
+        self._ui(apply)
+
+    def _tool_action(self, key):
+        if self.tool_busy:
+            return
+        self.tool_busy = True
+        for r in self.tool_rows.values():
+            r['btn'].configure(state="disabled")
+        self._tool_prog(key, 0.0, "Starting…")
+        threading.Thread(target=self._install_thread, args=(key,), daemon=True).start()
+
+    def _install_thread(self, key):
+        try:
+            getattr(self, f"_install_{key}")()
+            self._tool_prog(key, 1.0, "Done ✓", self.C_SUCCESS)
+        except Exception as exc:
+            self._tool_prog(key, 0.0, f"Failed: {exc}", self.C_ERROR)
+        finally:
+            self.tool_busy = False
+            _bootstrap_path()
+            self._ui(self._after_install)
+
+    def _after_install(self):
+        self._startup_check()
+        if self.tool_win is not None:
+            self._refresh_tools()
+
+    def _pip_install(self, key, package, lo=0.0, hi=1.0):
+        """pip install --upgrade <package>, mapping pip's output to bar progress."""
+        if FROZEN:
+            raise RuntimeError("not available in the packaged app — install a newer build instead")
+        stages = (('Collecting', .15), ('Requirement already', .3), ('Downloading', .4),
+                  ('Installing collected', .8), ('Successfully', 1.0))
+        base = [sys.executable, '-m', 'pip', 'install', '--upgrade', package,
+                '--progress-bar', 'off', '--disable-pip-version-check']
+        out = []
+        for extra in ([], ['--user', '--break-system-packages']):
+            frac = 0.05
+            self._tool_prog(key, lo + (hi - lo) * frac, "Starting pip…")
+            proc = subprocess.Popen(base + extra, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                    encoding='utf-8', errors='replace', **_NOWIN)
+            out = []
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                out.append(line)
+                for prefix, f in stages:
+                    if line.startswith(prefix):
+                        frac = max(frac, f)
+                        break
+                self._tool_prog(key, lo + (hi - lo) * frac, line[:90])
+            if proc.wait() == 0:
+                return
+            if 'externally-managed' not in '\n'.join(out):
+                break
+        raise RuntimeError(out[-1] if out else "pip failed")
+
+    # ── yt-dlp ────────────────────────────────────────────────────────────────
+
+    def _install_ytdlp(self):
+        self._pip_install('ytdlp', 'yt-dlp[default]')
+
+    # ── Deno (direct download → real byte progress) ───────────────────────────
+
+    @staticmethod
+    def _deno_target():
+        arm = platform.machine().lower() in ('arm64', 'aarch64')
+        if sys.platform == 'win32':
+            return 'x86_64-pc-windows-msvc'
+        if sys.platform == 'darwin':
+            return 'aarch64-apple-darwin' if arm else 'x86_64-apple-darwin'
+        return 'aarch64-unknown-linux-gnu' if arm else 'x86_64-unknown-linux-gnu'
+
+    def _install_deno(self):
+        import zipfile
+        url = ("https://github.com/denoland/deno/releases/latest/download/"
+               f"deno-{self._deno_target()}.zip")
+        os.makedirs(DENO_BIN, exist_ok=True)
+        tmp = os.path.join(tempfile.gettempdir(), 'deno_download.zip')
+        self._tool_prog('deno', 0.0, "Connecting…")
+        try:
+            with requests.get(url, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('Content-Length', 0))
+                done, t0 = 0, time.time()
+                with open(tmp, 'wb') as f:
+                    for chunk in r.iter_content(65536):
+                        f.write(chunk)
+                        done += len(chunk)
+                        speed = done / max(time.time() - t0, 1e-6) / 1_048_576
+                        txt = (f"{done / 1_048_576:.1f}"
+                               + (f" / {total / 1_048_576:.1f}" if total else "")
+                               + f" MB  ·  {speed:.1f} MB/s")
+                        self._tool_prog('deno', (done / total * 0.9) if total else None, txt)
+            self._tool_prog('deno', 0.95, "Extracting…")
+            with zipfile.ZipFile(tmp) as z:
+                z.extractall(DENO_BIN)
+            if sys.platform != 'win32':
+                os.chmod(os.path.join(DENO_BIN, 'deno'), 0o755)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        _bootstrap_path()
+        if not shutil.which('deno'):
+            raise RuntimeError("install finished but deno was not found")
+
+    # ── ffmpeg (static build via the static-ffmpeg package) ───────────────────
+
+    def _install_ffmpeg(self):
+        try:
+            import static_ffmpeg
+        except ImportError:
+            if FROZEN:
+                raise RuntimeError("not bundled in this build — install it from https://ffmpeg.org")
+            self._pip_install('ffmpeg', 'static-ffmpeg', 0.0, 0.4)
+            importlib.invalidate_caches()
+            import static_ffmpeg
+        self._tool_prog('ffmpeg', None, "Downloading ffmpeg (one-time, ~80 MB)…")
+        static_ffmpeg.add_paths()   # downloads on first run, then adds to PATH
+        exe = shutil.which('ffmpeg')
+        if not exe:
+            raise RuntimeError("download finished but ffmpeg was not found")
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(FFMPEG_PATH_FILE, 'w', encoding='utf-8') as f:
+            f.write(os.path.dirname(exe))   # remembered for the next launch
 
     # ═══════════════════════════════════════════════════════ MAIN ════════════
 
